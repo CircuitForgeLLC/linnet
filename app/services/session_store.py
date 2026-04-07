@@ -35,6 +35,11 @@ def get_session(session_id: str) -> Session | None:
     return _sessions.get(session_id)
 
 
+def active_session_count() -> int:
+    """Return the number of currently running sessions."""
+    return sum(1 for s in _sessions.values() if s.state == "running")
+
+
 def end_session(session_id: str) -> bool:
     """Stop and remove a session. Returns True if it existed."""
     session = _sessions.pop(session_id, None)

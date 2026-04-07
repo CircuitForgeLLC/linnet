@@ -1,0 +1,23 @@
+# compose.test.yml — CI / automated test runner
+#
+# Builds the API image and runs the pytest suite inside the container.
+# No frontend. No inference (CF_VOICE_MOCK=1 always).
+#
+# Usage:
+#   docker compose -f compose.test.yml run --rm linnet-test
+#   docker compose -f compose.test.yml run --rm linnet-test -- tests/test_tiers.py
+
+services:
+  linnet-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: >
+      sh -c "pip install -e '.[dev]' -q &&
+             python -m pytest tests/ -v --tb=short ${@}"
+    environment:
+      CF_VOICE_MOCK: "1"
+      DEMO_MODE: ""
+      CLOUD_MODE: ""
+      PYTHONUNBUFFERED: "1"
+    # No ports, no volumes — hermetic
