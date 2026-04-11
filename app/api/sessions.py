@@ -22,7 +22,7 @@ class SessionResponse(BaseModel):
 @router.post("/start", response_model=SessionResponse)
 async def start_session(req: StartRequest = StartRequest()) -> SessionResponse:
     """Start a new annotation session and begin streaming VoiceFrames."""
-    session = session_store.create_session(elcor=req.elcor)
+    session = await session_store.create_session(elcor=req.elcor)
     return SessionResponse(
         session_id=session.session_id,
         state=session.state,
@@ -33,7 +33,7 @@ async def start_session(req: StartRequest = StartRequest()) -> SessionResponse:
 @router.delete("/{session_id}/end")
 async def end_session(session_id: str) -> dict:
     """Stop a session and release its classifier."""
-    removed = session_store.end_session(session_id)
+    removed = await session_store.end_session(session_id)
     if not removed:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     return {"session_id": session_id, "state": "stopped"}

@@ -17,6 +17,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        GIT_TOKEN: ${GIT_TOKEN:-}
     restart: unless-stopped
     env_file: .env
     environment:
@@ -31,6 +33,8 @@ services:
     volumes:
       - /devl/linnet-cloud-data:/devl/linnet-cloud-data
       - ${HOME}/.config/circuitforge:/root/.config/circuitforge:ro
+      # Live-reload app code without rebuilding during active dev
+      - ./app:/app/app:ro
     networks:
       - linnet-cloud-net
 

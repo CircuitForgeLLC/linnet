@@ -21,12 +21,13 @@ export function useAudioCapture() {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     ctx = new AudioContext({ sampleRate: 16000 });
 
-    await ctx.audioWorklet.addModule("/audio-processor.js");
+    await ctx.audioWorklet.addModule(`${import.meta.env.BASE_URL}audio-processor.js`);
 
     source = ctx.createMediaStreamSource(stream);
     const processor = new AudioWorkletNode(ctx, "pcm-processor");
 
-    const wsUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/session/${sessionId}/audio`;
+    const apiBase = import.meta.env.VITE_API_BASE ?? "";
+    const wsUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${apiBase}/session/${sessionId}/audio`;
     ws = new WebSocket(wsUrl);
 
     ws.binaryType = "arraybuffer";

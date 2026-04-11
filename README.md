@@ -1,3 +1,3 @@
 # linnet
 
-Real-time tone annotation — Elcor-style emotional/tonal subtext for ND and autistic users
+Local-first voice transcription with speaker diarization, meeting notes, dictation, and real-time tone annotation — tonal subtext labels for calls, appointments, and conversations

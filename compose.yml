@@ -1,12 +1,21 @@
 services:
   linnet-api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GIT_TOKEN: ${GIT_TOKEN:-}
     ports:
       - "${LINNET_PORT:-8522}:8522"
     env_file:
       - .env
     environment:
       CF_VOICE_MOCK: "${CF_VOICE_MOCK:-1}"
+    volumes:
+      # Live-reload app code without rebuilding the image in dev
+      - ./app:/app/app:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   linnet-frontend:

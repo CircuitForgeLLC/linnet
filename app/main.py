@@ -3,22 +3,35 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import audio, events, export, history, sessions
+from app.api import audio, corrections, events, export, history, samples, sessions
 from app.config import settings
+from app.services import session_store
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s — %(message)s",
 )
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: begin idle session reaper
+    session_store.start_reaper()
+    yield
+    # Shutdown: cancel the reaper cleanly
+    await session_store.stop_reaper()
+
+
 app = FastAPI(
     title="Linnet",
-    description="Real-time tone annotation — Elcor-style subtext for ND/autistic users",
+    description="Real-time tone annotation — tonal subtext labels for ND/autistic users",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # ── Mode middleware (applied before CORS so headers are always present) ──────
@@ -58,6 +71,8 @@ app.include_router(events.router)
 app.include_router(history.router)
 app.include_router(audio.router)
 app.include_router(export.router)
+app.include_router(samples.router)
+app.include_router(corrections.router, prefix="/corrections", tags=["corrections"])
 
 
 @app.get("/health")

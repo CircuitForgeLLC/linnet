@@ -1,5 +1,24 @@
 <template>
   <div class="now-panel" :data-affect="affect">
+    <!-- Row 1: speaker type + queue state badges -->
+    <div class="now-badges">
+      <div v-if="speakerLabel" class="now-speaker" :data-speaker="speakerKind">
+        {{ speakerLabel }}
+      </div>
+      <div v-if="queueLabel" class="now-queue-badge" :data-queue="queueKind">
+        {{ queueLabel }}
+      </div>
+      <div v-if="environLabel" class="now-environ-badge" :data-environ="environKind">
+        {{ environLabel }}
+      </div>
+    </div>
+
+    <!-- Live transcript strip -->
+    <div v-if="transcriptText" class="now-transcript">
+      "{{ transcriptText }}"
+    </div>
+
+    <!-- Tone annotation -->
     <div class="now-label">{{ label }}</div>
     <div v-if="subtext" class="now-subtext">{{ subtext }}</div>
     <div class="now-meta">
@@ -14,15 +33,28 @@
       <span v-else>~</span>
       shift {{ (shiftMagnitude * 100).toFixed(0) }}%
     </div>
+    <CorrectionWidget
+      v-if="props.event"
+      :item-id="props.event.session_id"
+      :input-text="''"
+      :original-output="annotationOutput"
+      correction-type="annotation"
+      api-path="/corrections"
+      :context="{ session_id: props.event.session_id, label: props.event.label }"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import type { ToneEvent } from "../stores/session";
+import { useSessionStore } from "../stores/session";
+import CorrectionWidget from "./CorrectionWidget.vue";
 
 const props = defineProps<{
   event: ToneEvent | null;
 }>();
+
+const store = useSessionStore();
 
 const label = computed(() => props.event?.label ?? "—");
 const confidence = computed(() => props.event?.confidence ?? 0);
@@ -31,6 +63,62 @@ const affect = computed(() => props.event?.affect ?? "neutral");
 const prosodyFlags = computed(() => props.event?.prosody_flags ?? []);
 const shiftMagnitude = computed(() => props.event?.shift_magnitude ?? 0);
 const shiftDirection = computed(() => props.event?.shift_direction ?? "stable");
+const annotationOutput = computed(() => {
+  if (!props.event) return "";
+  const parts = [`[${props.event.label}]`];
+  if (props.event.subtext) parts.push(props.event.subtext);
+  return parts.join(" ");
+});
+
+// Speaker badge — hidden when no_speaker or no session
+const SPEAKER_LABELS: Record<string, string> = {
+  human_single: "Human",
+  human_multi:  "Group",
+  ivr_synth:    "IVR",
+  no_speaker:   "",
+  transfer:     "Transfer",
+};
+const speakerLabel = computed(() => {
+  const raw = store.currentSpeaker?.label;
+  if (!raw) return null;
+  const mapped = SPEAKER_LABELS[raw] ?? raw;
+  return mapped || null;
+});
+const speakerKind = computed(() => store.currentSpeaker?.label ?? "");
+
+// Queue state badge (hold_music, ringback, silence, etc.)
+const QUEUE_LABELS: Record<string, string> = {
+  hold_music: "On Hold",
+  ringback:   "Ringing",
+  busy:       "Busy",
+  dtmf_tone:  "DTMF",
+  silence:    "Silence",
+  dead_air:   "Dead Air",
+};
+const queueLabel = computed(() => {
+  const raw = store.currentQueue?.label;
+  if (!raw || raw === "silence") return null;
+  return QUEUE_LABELS[raw] ?? raw;
+});
+const queueKind = computed(() => store.currentQueue?.label ?? "");
+
+// Environment badge (call_center, music, noise, etc.)
+const ENVIRON_LABELS: Record<string, string> = {
+  call_center:       "Call Centre",
+  music:             "Music",
+  background_shift:  "Shift",
+  noise_floor_change: "Noise",
+  quiet:             "",
+};
+const environLabel = computed(() => {
+  const raw = store.currentEnviron?.label;
+  if (!raw || raw === "quiet") return null;
+  return ENVIRON_LABELS[raw] ?? raw;
+});
+const environKind = computed(() => store.currentEnviron?.label ?? "");
+
+// Live transcript strip
+const transcriptText = computed(() => store.currentTranscript?.text ?? null);
 </script>
 
 <script lang="ts">
@@ -59,6 +147,64 @@ export default { name: "NowPanel" };
 .now-panel[data-affect="genuine"]    { border-color: #34d39944; }
 .now-panel[data-affect="dismissive"] { border-color: #a78bfa44; }
 .now-panel[data-affect="urgent"]     { border-color: #fbbf2444; }
+
+.now-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  min-height: 1.4rem;
+}
+
+/* Shared pill base for speaker / queue / environ badges */
+.now-speaker,
+.now-queue-badge,
+.now-environ-badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-family: var(--font-mono, monospace);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.15em 0.6em;
+  border-radius: 999px;
+  background: var(--color-border, #2a2d3a);
+  color: var(--color-muted, #6b7280);
+  border: 1px solid transparent;
+  transition: background 0.3s, color 0.3s;
+}
+
+/* Speaker type colours */
+.now-speaker[data-speaker="human_single"] { background: #1e3a2f; color: #34d399; border-color: #34d39933; }
+.now-speaker[data-speaker="human_multi"]  { background: #1e3a2f; color: #34d399; border-color: #34d39933; }
+.now-speaker[data-speaker="ivr_synth"]    { background: #1e2a3a; color: #60a5fa; border-color: #60a5fa33; }
+.now-speaker[data-speaker="transfer"]     { background: #2a2a1e; color: #fbbf24; border-color: #fbbf2433; }
+
+/* Queue state colours */
+.now-queue-badge[data-queue="hold_music"] { background: #2a1e3a; color: #a78bfa; border-color: #a78bfa33; }
+.now-queue-badge[data-queue="ringback"]   { background: #2a2a1e; color: #fbbf24; border-color: #fbbf2433; }
+.now-queue-badge[data-queue="busy"]       { background: #3a1e1e; color: #f87171; border-color: #f8717133; }
+.now-queue-badge[data-queue="dtmf_tone"]  { background: #1e2a3a; color: #60a5fa; border-color: #60a5fa33; }
+.now-queue-badge[data-queue="dead_air"]   { background: #1e1e1e; color: #4b5563; border-color: #4b556333; }
+
+/* Environment colours */
+.now-environ-badge[data-environ="call_center"]        { background: #1e2a3a; color: #60a5fa; border-color: #60a5fa22; }
+.now-environ-badge[data-environ="music"]              { background: #2a1e3a; color: #a78bfa; border-color: #a78bfa22; }
+.now-environ-badge[data-environ="background_shift"]   { background: #2a2a1e; color: #fbbf24; border-color: #fbbf2422; }
+.now-environ-badge[data-environ="noise_floor_change"] { background: #2a1e1e; color: #f87171; border-color: #f8717122; }
+
+/* Live transcript strip */
+.now-transcript {
+  font-size: 0.8rem;
+  color: var(--color-muted, #6b7280);
+  font-style: italic;
+  border-left: 2px solid var(--color-border, #2a2d3a);
+  padding-left: 0.6rem;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
 
 .now-label {
   font-size: 1.35rem;

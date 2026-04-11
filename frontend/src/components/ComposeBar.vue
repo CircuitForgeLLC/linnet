@@ -19,15 +19,27 @@
         <span class="session-id">{{ store.sessionId?.slice(0, 8) }}…</span>
       </div>
 
-      <label class="elcor-toggle" title="Elcor subtext mode">
+      <label class="elcor-toggle" title="Tone prefix mode">
         <input type="checkbox" v-model="elcorLocal" disabled />
-        Elcor
+        Prefix
       </label>
+
+      <button
+        class="btn-mic"
+        :class="{ active: capturing }"
+        @click="handleMicToggle"
+        :aria-label="capturing ? 'Stop microphone' : 'Start microphone'"
+      >
+        {{ capturing ? "Mic on" : "Mic off" }}
+      </button>
 
       <button class="btn-stop" @click="handleStop">End session</button>
     </template>
 
-    <p v-if="error" class="compose-error">{{ error }}</p>
+    <p v-if="expired" class="compose-notice">
+      Session timed out after inactivity. Start a new one to continue.
+    </p>
+    <p v-else-if="error" class="compose-error">{{ error }}</p>
   </div>
 </template>
 
@@ -35,9 +47,11 @@
 import { ref } from "vue";
 import { useSessionStore } from "../stores/session";
 import { useToneStream } from "../composables/useToneStream";
+import { useAudioCapture } from "../composables/useAudioCapture";
 
 const store = useSessionStore();
-const { connect, disconnect } = useToneStream();
+const { connect, disconnect, expired } = useToneStream();
+const { start: startMic, stop: stopMic, capturing } = useAudioCapture();
 
 const starting = ref(false);
 const error = ref<string | null>(null);
@@ -57,8 +71,22 @@ async function handleStart() {
 }
 
 async function handleStop() {
+  if (capturing.value) stopMic();
   disconnect();
   await store.endSession();
+}
+
+async function handleMicToggle() {
+  error.value = null;
+  try {
+    if (capturing.value) {
+      stopMic();
+    } else {
+      await startMic(store.sessionId!);
+    }
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : "Mic access failed";
+  }
 }
 </script>
 
@@ -121,10 +149,34 @@ export default { name: "ComposeBar" };
   opacity: 0.5;
 }
 
+.btn-mic {
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--color-border, #2a2d3a);
+  background: transparent;
+  color: var(--color-muted, #6b7280);
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.btn-mic.active {
+  background: #dc262622;
+  border-color: #dc2626;
+  color: #dc2626;
+}
+
 .compose-error {
   width: 100%;
   font-size: 0.75rem;
   color: #ef4444;
+  margin: 0;
+}
+
+.compose-notice {
+  width: 100%;
+  font-size: 0.75rem;
+  color: var(--color-muted, #6b7280);
   margin: 0;
 }
 </style>
