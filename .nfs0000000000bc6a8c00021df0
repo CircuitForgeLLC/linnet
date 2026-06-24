@@ -2,12 +2,6 @@
 # manage.sh — Linnet dev/demo/cloud management script
 set -euo pipefail
 
-# Source .env early so LINNET_PORT, LINNET_FRONTEND_PORT, VITE_*, and all
-# other vars are available before any assignments below read them.
-if [[ -f .env ]]; then
-  set -a; source .env; set +a
-fi
-
 CMD=${1:-help}
 PROFILE=${2:-dev}  # dev | demo | cloud
 API_PORT=${LINNET_PORT:-8522}
@@ -42,12 +36,10 @@ case "$CMD" in
 
   start)
     _check_env
-    # Re-source after _check_env in case .env was just created from .env.example
-    set -a; source .env; set +a
-    # Recompute ports in case .env was just created with different values
-    API_PORT=${LINNET_PORT:-8522}
-    FE_PORT=${LINNET_FRONTEND_PORT:-8521}
     if [[ "$PROFILE" == "dev" ]]; then
+      # Load .env into the current shell so uvicorn and Vite inherit all settings
+      # (CF_VOICE_MOCK, CF_ORCH_URL, VITE_BASE_URL, VITE_API_BASE, etc.)
+      set -a; source .env; set +a
       info "Starting Linnet API on :${API_PORT}…"
       conda run -n cf uvicorn app.main:app \
         --host 0.0.0.0 --port "$API_PORT" --reload &

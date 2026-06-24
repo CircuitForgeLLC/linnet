@@ -5,8 +5,9 @@
       :key="i"
       class="history-item"
       :data-affect="evt.affect"
-      :title="`${evt.label} (${(evt.confidence * 100).toFixed(0)}%)`"
+      :title="`${speakerShort(evt.speaker_id)} · ${evt.label} (${(evt.confidence * 100).toFixed(0)}%)`"
     >
+      <span v-if="speakerShort(evt.speaker_id)" class="history-spk" :data-spk="speakerSlot(evt.speaker_id)">{{ speakerShort(evt.speaker_id) }}</span>
       <span class="history-label">{{ evt.label }}</span>
       <span class="history-conf">{{ (evt.confidence * 100).toFixed(0) }}%</span>
     </div>
@@ -25,6 +26,22 @@ const DISPLAY_COUNT = 8;
 const store = useSessionStore();
 // Most recent N events, newest last (scroll right)
 const recent = computed(() => store.events.slice(-DISPLAY_COUNT));
+
+// Returns single-letter label for a speaker_id, or empty for silence/unknown
+function speakerShort(id: string | undefined): string {
+  if (!id || id === "speaker_a") return "";
+  if (id === "Multiple") return "M";
+  const match = id.match(/Speaker\s+([A-Z]+)/i);
+  return match ? match[1] : "";
+}
+
+// CSS slot key for per-speaker colour
+function speakerSlot(id: string | undefined): string {
+  if (!id || id === "speaker_a") return "";
+  if (id === "Multiple") return "multi";
+  const match = id.match(/Speaker\s+([A-Z]+)/i);
+  return match ? match[1].toLowerCase() : "a";
+}
 </script>
 
 <script lang="ts">
@@ -63,6 +80,21 @@ export default { name: "HistoryStrip" };
 .history-item[data-affect="genuine"]    { border-color: #34d39966; }
 .history-item[data-affect="dismissive"] { border-color: #a78bfa66; }
 .history-item[data-affect="urgent"]     { border-color: #fbbf2466; }
+
+.history-spk {
+  font-size: 0.58rem;
+  font-family: var(--font-mono, monospace);
+  font-weight: 700;
+  padding: 0.05em 0.35em;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  align-self: center;
+}
+.history-spk[data-spk="a"]     { background: #1e3050; color: #60a5fa; border-color: #60a5fa44; }
+.history-spk[data-spk="b"]     { background: #2a1e3a; color: #c084fc; border-color: #c084fc44; }
+.history-spk[data-spk="c"]     { background: #1e3a2f; color: #34d399; border-color: #34d39944; }
+.history-spk[data-spk="d"]     { background: #2a2a1e; color: #fbbf24; border-color: #fbbf2444; }
+.history-spk[data-spk="multi"] { background: #2a1e1e; color: #f87171; border-color: #f8717144; }
 
 .history-label {
   font-size: 0.7rem;

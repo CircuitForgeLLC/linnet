@@ -7,18 +7,30 @@
     </header>
 
     <main class="app-main">
-      <section class="now-section">
-        <p class="section-label">Now</p>
-        <NowPanel :event="store.latest" />
-      </section>
+      <!-- v0.1.x: flat single-stream view (default, internal test fixture) -->
+      <template v-if="!settings.threadView">
+        <section class="now-section">
+          <p class="section-label">Now</p>
+          <NowPanel :event="store.latest" />
+        </section>
 
-      <section class="history-section">
-        <p class="section-label">Recent</p>
-        <HistoryStrip />
-      </section>
+        <section class="history-section">
+          <p class="section-label">Recent</p>
+          <HistoryStrip />
+        </section>
+      </template>
+
+      <!-- v0.2.x: per-speaker thread view (dev preview — toggle in DevPanel) -->
+      <template v-else>
+        <section class="thread-section">
+          <p class="section-label">Conversation threads <span class="thread-preview-badge">v0.2 preview</span></p>
+          <div class="thread-placeholder">ThreadView not yet built — coming in v0.2.x</div>
+        </section>
+      </template>
     </main>
 
     <footer class="app-footer">
+      <DevPanel v-if="isDev" />
       <ComposeBar />
     </footer>
   </div>
@@ -26,11 +38,15 @@
 
 <script setup lang="ts">
 import { useSessionStore } from "./stores/session";
+import { useSettingsStore } from "./stores/settings";
 import NowPanel from "./components/NowPanel.vue";
 import HistoryStrip from "./components/HistoryStrip.vue";
 import ComposeBar from "./components/ComposeBar.vue";
+import DevPanel from "./components/DevPanel.vue";
 
 const store = useSessionStore();
+const settings = useSettingsStore();
+const isDev = import.meta.env.DEV;
 </script>
 
 <style>
@@ -106,6 +122,26 @@ body {
   letter-spacing: 0.1em;
   color: var(--color-muted);
   margin-bottom: 0.5rem;
+}
+
+.thread-preview-badge {
+  font-size: 0.6rem;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--color-accent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 40%, transparent);
+  border-radius: 0.25rem;
+  padding: 0.05rem 0.3rem;
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+
+.thread-placeholder {
+  color: var(--color-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+  padding: 2rem 0;
+  text-align: center;
 }
 
 .app-footer {

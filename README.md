@@ -148,3 +148,7 @@ Linnet is developed and maintained on Forgejo at [git.opensourcesolarpunk.com/Ci
 ---
 
 *Linnet is a product of [CircuitForge LLC](https://circuitforge.tech) — privacy-first, safety-first, accessible AI tools for the tasks the system made hard on purpose.*
+
+---
+
+Humans own design, architecture, code review, testing, and verification. LLMs are part of our development workflow. [Our positions on LLM use →](https://circuitforge.tech/positions)

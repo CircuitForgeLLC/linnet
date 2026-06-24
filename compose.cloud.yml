@@ -6,11 +6,14 @@
 #
 # Requires in .env:
 #   CLOUD_MODE=true
-#   LINNET_LICENSE_KEY=CFG-LNNT-...   (or per-request key via API)
 #   HEIMDALL_URL=https://license.circuitforge.tech
+#   HEIMDALL_ADMIN_TOKEN=...           (admin token for /admin/cloud/resolve — resolves tier from user_id)
 #   DIRECTUS_JWT_SECRET=...            (Caddy injects X-CF-Session from cf_session cookie)
 #   HF_TOKEN=...                       (needed for real cf-voice inference; omit for mock)
 #   CF_VOICE_MOCK=0                    (set to 1 during staged rollout)
+#
+# Note: LINNET_LICENSE_KEY is for self-hosted installs only.
+#       Cloud mode resolves tier via HEIMDALL_ADMIN_TOKEN + /admin/cloud/resolve.
 
 services:
   linnet-api:

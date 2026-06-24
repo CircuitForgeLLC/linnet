@@ -8,6 +8,7 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: 8521,
+    allowedHosts: ["menagerie.circuitforge.tech"],
     proxy: {
       "/session": {
         target: "http://localhost:8522",
@@ -19,6 +20,10 @@ export default defineConfig({
         changeOrigin: true,
       },
       "/corrections": {
+        target: "http://localhost:8522",
+        changeOrigin: true,
+      },
+      "/dev": {
         target: "http://localhost:8522",
         changeOrigin: true,
       },

@@ -6,6 +6,7 @@ import logging
 import time
 
 from app.config import settings
+from app.models.service_event import ServiceEvent
 from app.models.session import Session
 from app.models.tone_event import ToneEvent
 from app.services.annotator import annotate
@@ -26,13 +27,31 @@ _CHUNKS_PER_WINDOW = _CLASSIFY_WINDOW_MS // _CHUNK_MS   # 10 chunks
 _audio_buffers: dict[str, list[bytes]] = {}
 
 
-async def create_session(elcor: bool = False) -> Session:
+async def create_session(
+    elcor: bool = False,
+    tier: str = "free",
+    user_id: str = "",
+    target_lang: str = "",
+    byok_deepl_key: str = "",
+    window_ms: int = 1000,
+    transcribe_lang: str = "",
+    num_speakers: int = 0,
+) -> Session:
     """Create a new session and start its ContextClassifier background task.
 
     If CF_ORCH_URL is configured, requests a managed cf-voice instance before
     starting the classifier. Falls back to in-process mock if allocation fails.
     """
-    session = Session(elcor=elcor)
+    session = Session(
+        elcor=elcor,
+        tier=tier,
+        user_id=user_id,
+        target_lang=target_lang,
+        byok_deepl_key=byok_deepl_key,
+        window_ms=window_ms,
+        transcribe_lang=transcribe_lang,
+        num_speakers=num_speakers,
+    )
     _sessions[session.session_id] = session
     await _allocate_voice(session)
     task = asyncio.create_task(
@@ -40,6 +59,10 @@ async def create_session(elcor: bool = False) -> Session:
         name=f"classifier-{session.session_id}",
     )
     _tasks[session.session_id] = task
+    asyncio.create_task(
+        _probe_voice_ready(session),
+        name=f"voice-ready-{session.session_id}",
+    )
     session.state = "running"
     logger.info(
         "Session %s started (voice=%s)",
@@ -59,7 +82,11 @@ def active_session_count() -> int:
 
 
 async def end_session(session_id: str) -> bool:
-    """Stop and remove a session. Returns True if it existed."""
+    """Stop and remove a session. Returns True if it existed.
+
+    For Paid tier sessions with annotation history, saves a snapshot to SQLite
+    so the user can resume the session later.
+    """
     session = _sessions.pop(session_id, None)
     if session is None:
         return False
@@ -69,8 +96,192 @@ async def end_session(session_id: str) -> bool:
         task.cancel()
     _audio_buffers.pop(session_id, None)
     await _release_voice(session)
+
+    if session.tier in ("paid", "premium") and session.history:
+        _save_snapshot(session)
+
     logger.info("Session %s ended", session_id)
     return True
+
+
+def _save_snapshot(session: Session) -> None:
+    """Persist a session's annotation history to the snapshots table."""
+    import json
+    import time as _time
+    import uuid
+
+    try:
+        from app.db import get_connection
+        conn = get_connection()
+        snapshot_id = str(uuid.uuid4())
+        events_json = json.dumps([
+            {
+                "label": e.label,
+                "confidence": e.confidence,
+                "speaker_id": e.speaker_id,
+                "shift_magnitude": e.shift_magnitude,
+                "timestamp": e.timestamp,
+                "subtext": e.subtext,
+                "affect": e.affect,
+            }
+            for e in session.history
+        ])
+        conn.execute(
+            """
+            INSERT INTO session_snapshots
+                (id, user_id, session_id, created_at, ended_at, elcor, event_count, events_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot_id,
+                session.user_id,
+                session.session_id,
+                session.created_at,
+                _time.time(),
+                1 if session.elcor else 0,
+                len(session.history),
+                events_json,
+            ),
+        )
+        conn.commit()
+        conn.close()
+        logger.info(
+            "Snapshot %s saved for session %s (%d events)",
+            snapshot_id, session.session_id, len(session.history),
+        )
+    except Exception as exc:
+        logger.warning("Failed to save snapshot for session %s: %s", session.session_id, exc)
+
+
+async def _probe_voice_ready(session: Session) -> None:
+    """Poll the cf-voice health endpoint and broadcast a service-event when ready.
+
+    Retries every second for up to 30s. On success, broadcasts status="ready"
+    so the frontend can unlock the mic button. On timeout, broadcasts
+    status="error" so the UI can surface a warning.
+
+    No-op for in-process mode (no cf_voice_url) — broadcasts ready immediately.
+    """
+    def _mark_ready() -> None:
+        session.voice_ready = True
+        session.broadcast(ServiceEvent(session_id=session.session_id, status="ready"))
+
+    def _mark_error(detail: str) -> None:
+        session.voice_error = detail
+        session.broadcast(ServiceEvent(
+            session_id=session.session_id, status="error", detail=detail,
+        ))
+
+    if not session.cf_voice_url:
+        # In-process mock or no managed voice: ready immediately
+        _mark_ready()
+        return
+
+    asyncio.create_task(
+        _poll_model_status(session),
+        name=f"model-status-{session.session_id}",
+    )
+
+    import httpx
+
+    health_url = session.cf_voice_url.rstrip("/") + "/health"
+    deadline = time.monotonic() + 30.0
+
+    while time.monotonic() < deadline:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get(health_url)
+            if resp.status_code == 200:
+                _mark_ready()
+                logger.debug("cf-voice ready for session %s", session.session_id)
+                # Surface any soft warnings (e.g. diarize configured but HF_TOKEN missing)
+                try:
+                    data = resp.json()
+                    for msg in data.get("warnings", []):
+                        session.broadcast(ServiceEvent(
+                            session_id=session.session_id,
+                            status="warning",
+                            detail=msg,
+                        ))
+                except Exception:
+                    pass
+                return
+        except Exception:
+            pass
+        await asyncio.sleep(1.0)
+
+    _mark_error("Voice service did not become ready in time. Try reloading.")
+    logger.warning("cf-voice readiness probe timed out for session %s", session.session_id)
+
+
+_MODEL_LABELS = {
+    "stt":        "speech-to-text (Whisper)",
+    "diarizer":   "speaker diarization (pyannote)",
+    "dimensional": "emotion dimensions (audeering)",
+    "prosody":    "prosody (openSMILE)",
+}
+
+
+async def _poll_model_status(session: Session) -> None:
+    """Poll cf-voice /health for per-model download progress and broadcast
+    loading/ready events to the frontend. Stops when all models are stable."""
+    if not session.cf_voice_url:
+        return
+
+    import httpx
+
+    health_url = session.cf_voice_url.rstrip("/") + "/health"
+    prev: dict[str, str] = {}
+
+    # Poll for up to 10 minutes (large model downloads can take a while)
+    deadline = time.monotonic() + 600.0
+
+    while time.monotonic() < deadline and session.state == "running":
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get(health_url)
+            if resp.status_code == 200:
+                data = resp.json()
+                models: dict[str, str] = data.get("models", {})
+
+                for key, status in models.items():
+                    if models.get(key) == prev.get(key):
+                        continue
+                    label = _MODEL_LABELS.get(key, key)
+                    if status == "loading":
+                        session.broadcast(ServiceEvent(
+                            session_id=session.session_id,
+                            status="loading",
+                            detail=f"Downloading {label}…",
+                        ))
+                    elif status == "ready" and prev.get(key) == "loading":
+                        session.broadcast(ServiceEvent(
+                            session_id=session.session_id,
+                            status="loading",
+                            detail=f"{label.capitalize()} ready.",
+                        ))
+                    elif status == "error":
+                        session.broadcast(ServiceEvent(
+                            session_id=session.session_id,
+                            status="warning",
+                            detail=f"Failed to load {label}.",
+                        ))
+
+                prev = dict(models)
+
+                # Done when nothing is still loading
+                if models and all(s != "loading" for s in models.values()):
+                    # Clear any loading detail
+                    session.broadcast(ServiceEvent(
+                        session_id=session.session_id,
+                        status="loading",
+                        detail="",
+                    ))
+                    return
+        except Exception:
+            pass
+
+        await asyncio.sleep(2.0)
 
 
 async def _allocate_voice(session: Session) -> None:
@@ -207,7 +418,8 @@ async def forward_audio_chunk(
     buf = _audio_buffers.setdefault(session.session_id, [])
     buf.append(raw)
 
-    if len(buf) < _CHUNKS_PER_WINDOW:
+    chunks_needed = max(1, session.window_ms // _CHUNK_MS)
+    if len(buf) < chunks_needed:
         return  # not enough audio yet — wait for more chunks
 
     # Flush: concatenate window, reset buffer
@@ -221,6 +433,8 @@ async def forward_audio_chunk(
         "timestamp": timestamp,
         "elcor": session.elcor,
         "session_id": session.session_id,
+        "language": session.transcribe_lang or None,  # None = Whisper auto-detect
+        "num_speakers": session.num_speakers or None,  # None = pyannote auto-detect
     }
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -233,6 +447,7 @@ async def forward_audio_chunk(
 
     from app.models.queue_event import QueueEvent
     from app.models.transcript_event import TranscriptEvent
+    from app.models.scene_event import SceneEvent, AccentEvent
 
     for ev in data.get("events", []):
         etype = ev.get("event_type")
@@ -277,63 +492,89 @@ async def forward_audio_chunk(
             )
             session.broadcast(queue_ev)
 
+        elif etype == "scene":
+            scene_ev = SceneEvent(
+                session_id=session.session_id,
+                label=ev["label"],
+                confidence=ev.get("confidence", 1.0),
+                timestamp=ev["timestamp"],
+                privacy_risk=ev.get("privacy_risk", "low"),
+            )
+            session.broadcast(scene_ev)
+
+        elif etype == "accent":
+            accent_ev = AccentEvent(
+                session_id=session.session_id,
+                region=ev["label"],
+                language=ev.get("language", ""),
+                confidence=ev.get("confidence", 1.0),
+                timestamp=ev["timestamp"],
+            )
+            session.broadcast(accent_ev)
+
 
 # ── Idle session reaper ───────────────────────────────────────────────────────
 
+def _should_reap(session: Session, now: float) -> bool:
+    """
+    Return True if a session should be reaped.
+
+    Free tier: reap when last subscriber left > SESSION_IDLE_TTL_S ago.
+    Paid/premium: reap when last activity (broadcast) > SESSION_PAID_TTL_S ago,
+    regardless of subscriber state. This lets paid sessions survive reconnects
+    but enforces a hard 30-min activity timeout.
+    """
+    if session.state != "running":
+        return False
+
+    if session.tier in ("paid", "premium"):
+        return (now - session.last_activity_at) > settings.session_paid_ttl_s
+
+    # Free tier: only reap when there are no subscribers and the idle clock is running
+    return (
+        session.subscriber_count() == 0
+        and session.last_subscriber_left_at is not None
+        and (now - session.last_subscriber_left_at) > settings.session_idle_ttl_s
+    )
+
+
 async def _reaper_loop() -> None:
     """
-    Periodically kill sessions with no active SSE subscribers.
+    Periodically kill sessions that have exceeded their tier TTL.
 
-    A session becomes eligible for reaping when:
-    - Its last SSE subscriber disconnected more than SESSION_IDLE_TTL_S seconds ago
-    - It has not been explicitly ended (state != "stopped")
+    Free tier (90s): reaps when last SSE subscriber left > 90s ago.
+      Covers mobile tab timeout / screen lock / crash.
 
-    This covers the common mobile pattern: screen locks → browser suspends tab →
-    EventSource closes → SSE subscriber count drops to zero. If the user doesn't
-    return within the TTL window, the session is cleaned up automatically.
+    Paid tier (30 min): reaps when last annotation event > 30 min ago,
+      regardless of subscriber state. Allows paid users to reconnect within
+      the window without losing their session.
 
-    The reaper runs every REAP_INTERVAL_S seconds (half the TTL, so the worst-case
-    overshoot is TTL + REAP_INTERVAL_S).
+    The reaper runs every REAP_INTERVAL_S seconds (half the free TTL, capped
+    at 60s, so worst-case overshoot is small).
     """
     ttl = settings.session_idle_ttl_s
-    interval = max(15, ttl // 2)
-    logger.info("Session reaper started (TTL=%ds, check every %ds)", ttl, interval)
+    interval = max(15, min(60, ttl // 2))
+    logger.info("Session reaper started (free TTL=%ds, paid TTL=%ds, check every %ds)",
+                ttl, settings.session_paid_ttl_s, interval)
     while True:
         await asyncio.sleep(interval)
         now = time.monotonic()
-        to_reap = [
-            sid
-            for sid, session in list(_sessions.items())
-            if (
-                session.state == "running"
-                and session.subscriber_count() == 0
-                and session.last_subscriber_left_at is not None
-                and (now - session.last_subscriber_left_at) > ttl
-            )
-        ]
+        to_reap = [sid for sid, s in list(_sessions.items()) if _should_reap(s, now)]
         for sid in to_reap:
-            logger.info(
-                "Reaping idle session %s (no subscribers for >%ds)", sid, ttl
-            )
+            session = _sessions.get(sid)
+            tier = session.tier if session else "free"
+            logger.info("Reaping idle %s session %s", tier, sid)
             await end_session(sid)
 
 
 async def _reaper_loop_once() -> None:
     """Single reaper pass — used by tests to avoid sleeping."""
-    ttl = settings.session_idle_ttl_s
     now = time.monotonic()
-    to_reap = [
-        sid
-        for sid, session in list(_sessions.items())
-        if (
-            session.state == "running"
-            and session.subscriber_count() == 0
-            and session.last_subscriber_left_at is not None
-            and (now - session.last_subscriber_left_at) > ttl
-        )
-    ]
+    to_reap = [sid for sid, s in list(_sessions.items()) if _should_reap(s, now)]
     for sid in to_reap:
-        logger.info("Reaping idle session %s (no subscribers for >%ds)", sid, ttl)
+        session = _sessions.get(sid)
+        tier = session.tier if session else "free"
+        logger.info("Reaping idle %s session %s", tier, sid)
         await end_session(sid)
 
 

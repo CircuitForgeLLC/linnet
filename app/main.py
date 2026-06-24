@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import audio, corrections, events, export, history, samples, sessions
+from app.api import audio, corrections, dev, events, export, history, samples, sessions, snapshots
 from app.config import settings
 from app.services import session_store
 
@@ -68,11 +68,14 @@ app.add_middleware(
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(sessions.router)
 app.include_router(events.router)
+if not settings.demo_mode and not settings.cloud_mode:
+    app.include_router(dev.router)
 app.include_router(history.router)
 app.include_router(audio.router)
 app.include_router(export.router)
 app.include_router(samples.router)
 app.include_router(corrections.router, prefix="/corrections", tags=["corrections"])
+app.include_router(snapshots.router)
 
 
 @app.get("/health")

@@ -11,9 +11,12 @@
 import { ref, onUnmounted } from "vue";
 import {
   useSessionStore,
+  type ServiceEvent,
   type SpeakerEvent,
   type TranscriptEvent,
   type QueueEvent,
+  type SceneEvent,
+  type AccentEvent,
 } from "../stores/session";
 import { useWakeLock } from "./useWakeLock";
 
@@ -44,6 +47,15 @@ export function useToneStream() {
     });
     source.addEventListener("environ-event", (e: MessageEvent) => {
       try { store.updateQueue(JSON.parse(e.data) as QueueEvent); } catch { /* */ }
+    });
+    source.addEventListener("scene-event", (e: MessageEvent) => {
+      try { store.updateScene(JSON.parse(e.data) as SceneEvent); } catch { /* */ }
+    });
+    source.addEventListener("accent-event", (e: MessageEvent) => {
+      try { store.updateAccent(JSON.parse(e.data) as AccentEvent); } catch { /* */ }
+    });
+    source.addEventListener("service-event", (e: MessageEvent) => {
+      try { store.updateService(JSON.parse(e.data) as ServiceEvent); } catch { /* */ }
     });
 
     source.onopen = () => { connected.value = true; };
